@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>複数画像切替付きスポット案内（自動音声版） - ログ有効版</title>
+  <title>複数画像切替付きスポット案内（自動音声版） - 完全版</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body { margin: 0; overflow: hidden; background-color: #000; color: white; font-family: sans-serif; text-align: center; }
@@ -21,6 +21,11 @@
     #logViewer { position:absolute; bottom:10px; left:10px; right:10px; z-index:3; background: rgba(0,0,0,0.65); padding:8px; border-radius:8px; max-height:30vh; overflow:auto; display:none; text-align:left; font-size:12px;}
     table.logtable { width:100%; border-collapse:collapse; color:#fff; font-size:12px; }
     table.logtable th, table.logtable td { padding:4px; border-bottom:1px solid rgba(255,255,255,0.05); text-align:left; }
+    #startAppBtn {
+      position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+      padding:20px 40px;font-size:18px;border-radius:12px;background:#007BFF;color:white;border:none;cursor:pointer;
+      z-index:5;
+    }
   </style>
 </head>
 <body>
@@ -46,8 +51,10 @@
 
 <div id="logViewer"></div>
 
+<button id="startAppBtn">アプリ開始</button>
+
 <script>
-/* ----- 既存スポットデータ（変更なし） ----- */
+/* ----- スポットデータ ----- */
 const spots = [
   { name: "13号館前", lat: 35.69304350697483, lon: 140.05084706907195, radius: 0, images: ["image0.jpeg", "image1.jpeg"], audio: { A: "spot1.ja.mp3", B: "spot1.en.mp3", C: "spot1.ch.mp3" }},
   { name: "曲がり角左１", lat: 35.693237099346376, lon: 140.0510123108731, radius: 10, images: ["image2.jpeg", "image10.jpeg"], audio: { A: "spot2.ja.mp3", B: "spot2.en.mp3", C: "spot2.ch.mp3" }},
@@ -74,6 +81,7 @@ const patternBtn = document.getElementById("patternBtn");
 const audio = document.getElementById("audio");
 const prevBtn = document.getElementById("prevBtn");
 const nextImgBtn = document.getElementById("nextImgBtn");
+const startAppBtn = document.getElementById("startAppBtn");
 
 const startLogBtn = document.getElementById("startLogBtn");
 const stopLogBtn = document.getElementById("stopLogBtn");
@@ -83,11 +91,14 @@ const viewBtn = document.getElementById("viewBtn");
 const logCount = document.getElementById("logCount");
 const logViewer = document.getElementById("logViewer");
 
-navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false })
-  .then(stream => camera.srcObject = stream)
-  .catch(err => console.warn("カメラへのアクセスに失敗しました: " + err));
+let logging = false;
+let logs = JSON.parse(localStorage.getItem('gpsLogs_v1') || '[]');
+let lastPos = null;
+let watchId = null;
 
-/* ---------- 距離計算（既存） ---------- */
+updateLogCountUI();
+
+/* ---------- 距離計算 ---------- */
 function getDistance(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -97,25 +108,16 @@ function getDistance(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-/* ---------- ログ管理 ---------- */
-let logging = false;
-let logs = JSON.parse(localStorage.getItem('gpsLogs_v1') || '[]'); // 保存キー
-let lastPos = null;
-let watchId = null;
-updateLogCountUI();
+/* ---------- ログ関連 ---------- */
+function updateLogCountUI(){ logCount.innerText = `ログ: ${logs.length} 件`; }
 
-function updateLogCountUI(){
-  logCount.innerText = `ログ: ${logs.length} 件`;
-}
-
-/* ログエントリを作る */
 function makeLogEntry(pos){
   const coords = pos.coords;
   const t = new Date().toISOString();
   const nextSpot = spots[currentIndex] || null;
   const distToNext = nextSpot ? getDistance(coords.latitude, coords.longitude, nextSpot.lat, nextSpot.lon) : null;
   return {
-    t, // ISO 時刻
+    t,
     lat: coords.latitude,
     lon: coords.longitude,
     accuracy: coords.accuracy,
@@ -123,21 +125,18 @@ function makeLogEntry(pos){
     heading: coords.heading === null ? "" : coords.heading,
     speed: coords.speed === null ? "" : coords.speed,
     spotIndex: currentIndex,
-    inSpot: !!currentSpot, // 現在スポット表示中か
+    inSpot: !!currentSpot,
     distToNext: distToNext
   };
 }
 
-/* ログ保存（メモリと localStorage） */
 function pushLog(pos){
   const entry = makeLogEntry(pos);
   logs.push(entry);
-  // ある程度たまったら localStorage に保存（耐久性向上）
   if(logs.length % 10 === 0) localStorage.setItem('gpsLogs_v1', JSON.stringify(logs));
   updateLogCountUI();
 }
 
-/* CSV 生成とダウンロード */
 function downloadCSV(){
   if(logs.length === 0){ alert("ログがありません。"); return; }
   const header = ["t","lat","lon","accuracy","altitude","heading","speed","spotIndex","inSpot","distToNext_m"];
@@ -154,7 +153,6 @@ function downloadCSV(){
   URL.revokeObjectURL(url);
 }
 
-/* ログ表示（簡易） */
 function toggleLogViewer(){
   if(logViewer.style.display === "none" || logViewer.style.display === ""){
     renderLogViewer();
@@ -165,9 +163,9 @@ function toggleLogViewer(){
     viewBtn.innerText = "ログ表示";
   }
 }
+
 function renderLogViewer(){
   if(logs.length === 0){ logViewer.innerHTML = "<div style='padding:8px;color:#ccc;'>ログなし</div>"; return; }
-  // 表示は最新から10行
   const slice = logs.slice(-50).reverse();
   let html = "<table class='logtable'><thead><tr><th>時刻</th><th>lat</th><th>lon</th><th>acc(m)</th><th>spd</th><th>spot</th><th>inSpot</th><th>distNext(m)</th></tr></thead><tbody>";
   for(const r of slice){
@@ -186,7 +184,6 @@ function renderLogViewer(){
   logViewer.innerHTML = html;
 }
 
-/* クリア（確認あり） */
 function clearLogs(){
   if(!confirm("ログを全て消します。よろしいですか？")) return;
   logs = [];
@@ -195,46 +192,16 @@ function clearLogs(){
   renderLogViewer();
 }
 
-/* スタート / ストップ操作 */
-startLogBtn.addEventListener('click', () => {
-  logging = true;
-  startLogBtn.style.display = "none";
-  stopLogBtn.style.display = "block";
-  // 初回保存
-  localStorage.setItem('gpsLogs_v1', JSON.stringify(logs));
-  alert("ログ記録を開始しました（ブラウザの位置情報許可が必要）。");
-});
-stopLogBtn.addEventListener('click', () => {
-  logging = false;
-  startLogBtn.style.display = "block";
-  stopLogBtn.style.display = "none";
-  localStorage.setItem('gpsLogs_v1', JSON.stringify(logs));
-  alert("ログ記録を停止しました。CSV をダウンロードしてください。");
-});
+/* スタート / ストップボタン */
+startLogBtn.addEventListener('click', () => { logging = true; startLogBtn.style.display="none"; stopLogBtn.style.display="block"; localStorage.setItem('gpsLogs_v1', JSON.stringify(logs)); alert("ログ記録を開始しました。"); });
+stopLogBtn.addEventListener('click', () => { logging = false; startLogBtn.style.display="block"; stopLogBtn.style.display="none"; localStorage.setItem('gpsLogs_v1', JSON.stringify(logs)); alert("ログ記録を停止しました。CSVをダウンロードしてください。"); });
 downloadBtn.addEventListener('click', downloadCSV);
 viewBtn.addEventListener('click', toggleLogViewer);
 clearBtn.addEventListener('click', clearLogs);
 
-/* ---------- 位置更新の監視 ---------- */
-if ("geolocation" in navigator) {
-  watchId = navigator.geolocation.watchPosition(
-    pos => {
-      lastPos = pos;
-      // ログ中なら push
-      if(logging) pushLog(pos);
-      // 既存の近接チェックへ流す
-      checkProximity(pos.coords.latitude, pos.coords.longitude);
-    },
-    err => { info.innerText = "位置情報の取得に失敗しました: " + err.message; },
-    { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
-  );
-} else {
-  info.innerText = "位置情報 API が使えません";
-}
-
-/* ---------- 既存のスポット表示ロジック（若干改良） ---------- */
-function checkProximity(lat, lon) {
-  if (currentIndex >= spots.length) {
+/* ---------- スポット判定 ---------- */
+function checkProximity(lat, lon){
+  if(currentIndex >= spots.length){
     info.innerText = "すべてのスポットを通過しました。";
     hideAllUI();
     return;
@@ -243,26 +210,24 @@ function checkProximity(lat, lon) {
   const distance = getDistance(lat, lon, spot.lat, spot.lon);
   const range = spot.radius || 10;
 
-  info.innerText =
+  info.innerText = 
     `現在地: 緯度 ${lat.toFixed(6)}, 経度 ${lon.toFixed(6)}\n` +
     `次のスポット: ${spot.name}（${currentIndex + 1} / ${spots.length}）\n` +
     `残り距離: ${distance.toFixed(1)}m\n` +
     `ログ件数: ${logs.length}`;
 
-  // 「最初のスポットは起動時に即表示」のふるまいを維持
-  if (currentIndex === 0 && !hasEnteredSpot) {
+  if(currentIndex === 0 && !hasEnteredSpot){
     showSpot(spots[0]);
     return;
   }
 
-  if (currentIndex >= 1 && !hasEnteredSpot && distance < range) {
+  if(currentIndex >= 1 && !hasEnteredSpot && distance < range){
     showSpot(spot);
-    // 到達ログ（補助）：到達時のログを追加
     if(logging && lastPos) pushLog(lastPos);
   }
 }
 
-function showSpot(spot) {
+function showSpot(spot){
   currentSpot = spot;
   hasEnteredSpot = true;
   imageIndex = 0;
@@ -272,73 +237,42 @@ function showSpot(spot) {
   image.style.display = "block";
   nextBtn.style.display = "block";
   patternBtn.style.display = "block";
-  prevBtn.style.display = spot.images.length > 1 ? "block" : "none";
-  nextImgBtn.style.display = spot.images.length > 1 ? "block" : "none";
+  prevBtn.style.display = spot.images.length>1?"block":"none";
+  nextImgBtn.style.display = spot.images.length>1?"block":"none";
 
   audio.loop = true;
-  audio.play().catch(e => console.log("自動再生に失敗:", e));
+  audio.play().catch(e=>console.log("音声自動再生失敗:",e));
 }
 
-function switchPattern() {
-  const patterns = ["A", "B", "C"];
+function switchPattern(){
+  const patterns = ["A","B","C"];
   const index = patterns.indexOf(currentPattern);
-  currentPattern = patterns[(index + 1) % patterns.length];
+  currentPattern = patterns[(index+1)%patterns.length];
   updatePatternButtonText();
-
-  if (currentSpot) {
+  if(currentSpot){
     audio.pause();
     audio.src = currentSpot.audio[currentPattern];
-    audio.play().catch(e => console.log("自動再生に失敗:", e));
+    audio.play().catch(e=>console.log("音声自動再生失敗:",e));
   }
 }
 
-function showPrevImage() {
-  if (!currentSpot) return;
-  imageIndex = (imageIndex - 1 + currentSpot.images.length) % currentSpot.images.length;
-  image.src = currentSpot.images[imageIndex];
+function showPrevImage(){ if(!currentSpot) return; imageIndex=(imageIndex-1+currentSpot.images.length)%currentSpot.images.length; image.src=currentSpot.images[imageIndex]; }
+function showNextImage(){ if(!currentSpot) return; imageIndex=(imageIndex+1)%currentSpot.images.length; image.src=currentSpot.images[imageIndex]; }
+
+function updatePatternButtonText(){ 
+  let label=""; 
+  switch(currentPattern){ case "A": label="English"; break; case "B": label="中文"; break; case "C": label="日本語"; break; } 
+  patternBtn.innerText = label; 
 }
 
-function showNextImage() {
-  if (!currentSpot) return;
-  imageIndex = (imageIndex + 1) % currentSpot.images.length;
-  image.src = currentSpot.images[imageIndex];
-}
-
-function updatePatternButtonText() {
-  let label = "";
-  switch (currentPattern) {
-    case "A": label = "English"; break;
-    case "B": label = "中文"; break;
-    case "C": label = "日本語"; break;
-  }
-  patternBtn.innerText = label;
-}
-
-function goToNextSpot() {
+function goToNextSpot(){
   audio.pause();
-  // 出発前に到達ログを付ける
   if(logging && lastPos) pushLog(lastPos);
   currentIndex++;
-  hasEnteredSpot = false;
-  currentSpot = null;
+  hasEnteredSpot=false;
+  currentSpot=null;
   hideAllUI();
 }
 
-function hideAllUI() {
-  image.style.display = "none";
-  nextBtn.style.display = "none";
-  patternBtn.style.display = "none";
-  prevBtn.style.display = "none";
-  nextImgBtn.style.display = "none";
-}
-
-window.onload = () => {
-  // 起動時に最初のスポットを表示（既存と同様）
-  showSpot(spots[0]);
-  updatePatternButtonText();
-  renderLogViewer();
-};
-</script>
-
-</body>
-</html>
+function hideAllUI(){
+  image
