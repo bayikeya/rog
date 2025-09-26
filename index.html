@@ -46,7 +46,7 @@ let hasEnteredSpot = false;
 let currentSpot = null;
 let currentPattern = "A";
 let imageIndex = 0;
-let logs = []; // ログ配列
+let logs = [];
 
 const camera = document.getElementById("camera");
 const info = document.getElementById("info");
@@ -57,12 +57,10 @@ const audio = document.getElementById("audio");
 const prevBtn = document.getElementById("prevBtn");
 const nextImgBtn = document.getElementById("nextImgBtn");
 
-// カメラ起動
 navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false })
   .then(stream => camera.srcObject = stream)
   .catch(err => alert("カメラへのアクセスに失敗しました: " + err));
 
-// 緯度経度距離計算
 function getDistance(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -72,7 +70,6 @@ function getDistance(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-// 位置情報チェック
 function checkProximity(lat, lon) {
   if (currentIndex >= spots.length) {
     info.innerText = "すべてのスポットを通過しました。";
@@ -89,12 +86,11 @@ function checkProximity(lat, lon) {
     `残り距離: ${distance.toFixed(1)}m`;
 
   if (currentIndex >= 1 && !hasEnteredSpot && distance < range) {
-    showSpot(spot);
+    showSpot(spot, lat, lon);
   }
 }
 
-// スポット表示
-function showSpot(spot) {
+function showSpot(spot, userLat, userLon) {
   currentSpot = spot;
   hasEnteredSpot = true;
   imageIndex = 0;
@@ -110,122 +106,89 @@ function showSpot(spot) {
   audio.loop = true;
   audio.play().catch(e => console.log("自動再生に失敗:", e));
 
-  logSpot(spot); // ログ記録
+  logSpot(spot, userLat, userLon); // ログ記録
 }
 
-// ログ記録
-function logSpot(spot) {
-  if (!spot) return;
-  const logEntry = {
+function switchPattern() {
+  const patterns = ["A","B","C"];
+  currentPattern = patterns[(patterns.indexOf(currentPattern)+1)%patterns.length];
+  updatePatternButtonText();
+  if(currentSpot){
+    audio.pause();
+    audio.src = currentSpot.audio[currentPattern];
+    audio.play().catch(e=>console.log("自動再生に失敗:",e));
+  }
+}
+
+function showPrevImage(){ if(!currentSpot) return; imageIndex=(imageIndex-1+currentSpot.images.length)%currentSpot.images.length; image.src=currentSpot.images[imageIndex]; }
+function showNextImage(){ if(!currentSpot) return; imageIndex=(imageIndex+1)%currentSpot.images.length; image.src=currentSpot.images[imageIndex]; }
+function updatePatternButtonText(){ let label=""; switch(currentPattern){case "A":label="English";break;case "B":label="中文";break;case "C":label="日本語";break;} patternBtn.innerText=label; }
+
+function goToNextSpot(){
+  audio.pause();
+  currentIndex++;
+  hasEnteredSpot=false;
+  currentSpot=null;
+  hideAllUI();
+}
+
+function hideAllUI(){ image.style.display="none"; nextBtn.style.display="none"; patternBtn.style.display="none"; prevBtn.style.display="none"; nextImgBtn.style.display="none"; }
+
+function logSpot(spot, userLat, userLon){
+  if(!spot) return;
+  const distance = getDistance(userLat,userLon,spot.lat,spot.lon);
+  const logEntry={
     timestamp: new Date().toISOString(),
     spotName: spot.name,
-    lat: spot.lat,
-    lon: spot.lon,
+    lat: userLat,
+    lon: userLon,
+    distance: distance.toFixed(1), // スポットからの距離（m）
     audioPattern: currentPattern,
     imageIndex: imageIndex
   };
   logs.push(logEntry);
-  console.log("ログ記録:", logEntry);
+  console.log("ログ記録:",logEntry);
 }
 
-// CSVダウンロード
-function downloadCSV() {
-  if (logs.length === 0) { alert("ログはまだありません"); return; }
-  const headers = Object.keys(logs[0]).join(",");
-  const csvRows = logs.map(row => Object.values(row).join(","));
-  const csvContent = [headers, ...csvRows].join("\n");
-
-  const blob = new Blob([csvContent], { type: "text/csv" });
+function downloadCSV(){
+  if(logs.length===0) return;
+  const headers=Object.keys(logs[0]).join(",");
+  const csv = logs.map(e=>Object.values(e).join(",")).join("\n");
+  const blob = new Blob([headers+"\n"+csv],{type:"text/csv"});
   const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `spot_logs_${new Date().toISOString()}.csv`;
-  document.body.appendChild(a);
+  const a=document.createElement("a");
+  a.href=url;
+  a.download="spot_logs.csv";
   a.click();
-  document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
 
-// UIボタン作成（ダウンロード）
-const downloadBtn = document.createElement("button");
-downloadBtn.innerText = "ログをダウンロード";
-downloadBtn.style.position = "absolute";
-downloadBtn.style.top = "10px";
-downloadBtn.style.right = "10px";
-downloadBtn.style.zIndex = 2;
-downloadBtn.style.padding = "8px 12px";
-downloadBtn.style.fontSize = "14px";
-downloadBtn.style.borderRadius = "6px";
-downloadBtn.style.backgroundColor = "#28a745";
-downloadBtn.style.color = "white";
-downloadBtn.style.border = "none";
-downloadBtn.style.cursor = "pointer";
-downloadBtn.onclick = downloadCSV;
-document.body.appendChild(downloadBtn);
-
-// パターン切替
-function switchPattern() {
-  const patterns = ["A","B","C"];
-  const index = patterns.indexOf(currentPattern);
-  currentPattern = patterns[(index+1)%patterns.length];
-  updatePatternButtonText();
-  if (currentSpot) {
-    audio.pause();
-    audio.src = currentSpot.audio[currentPattern];
-    audio.play().catch(e => console.log("自動再生に失敗:", e));
-  }
-}
-
-function showPrevImage() {
-  if (!currentSpot) return;
-  imageIndex = (imageIndex - 1 + currentSpot.images.length) % currentSpot.images.length;
-  image.src = currentSpot.images[imageIndex];
-}
-function showNextImage() {
-  if (!currentSpot) return;
-  imageIndex = (imageIndex + 1) % currentSpot.images.length;
-  image.src = currentSpot.images[imageIndex];
-}
-
-function updatePatternButtonText() {
-  let label = "";
-  switch(currentPattern){ case "A": label="English"; break; case "B": label="中文"; break; case "C": label="日本語"; break; }
-  patternBtn.innerText = label;
-}
-
-// 次のスポットへ
-function goToNextSpot() {
-  audio.pause();
-  currentIndex++;
-  hasEnteredSpot = false;
-  currentSpot = null;
-  hideAllUI();
-}
-
-// UI非表示
-function hideAllUI() {
-  image.style.display="none";
-  nextBtn.style.display="none";
-  patternBtn.style.display="none";
-  prevBtn.style.display="none";
-  nextImgBtn.style.display="none";
-}
-
-// GPS監視
 if("geolocation" in navigator){
   navigator.geolocation.watchPosition(
-    pos => checkProximity(pos.coords.latitude,pos.coords.longitude),
-    err => info.innerText="位置情報の取得に失敗しました",
-    { enableHighAccuracy:true, maximumAge:0, timeout:5000 }
+    pos=>checkProximity(pos.coords.latitude,pos.coords.longitude),
+    err=>info.innerText="位置情報の取得に失敗しました",
+    {enableHighAccuracy:true, maximumAge:0, timeout:5000}
   );
 }
 
-// 起動時
-window.onload = () => {
-  showSpot(spots[0]);
+window.onload=()=>{
+  showSpot(spots[0], spots[0].lat, spots[0].lon);
   updatePatternButtonText();
+  const btn = document.createElement("button");
+  btn.innerText="CSVダウンロード";
+  btn.style.position="absolute";
+  btn.style.top="10px";
+  btn.style.right="10px";
+  btn.style.zIndex=2;
+  btn.style.padding="8px 12px";
+  btn.style.borderRadius="6px";
+  btn.style.background="#28a745";
+  btn.style.color="white";
+  btn.style.border="none";
+  btn.style.cursor="pointer";
+  btn.onclick=downloadCSV;
+  document.body.appendChild(btn);
 };
 </script>
-
 </body>
 </html>
